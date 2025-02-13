@@ -290,6 +290,8 @@ uint8_t HIDBoot<BOOT_PROTOCOL>::Init(uint8_t parent, uint8_t port, bool lowspeed
         uint8_t num_of_conf; // number of configurations
         //uint8_t num_of_intf; // number of interfaces
 
+        bool boot_interface = true;
+
         AddressPool &addrPool = pUsb->GetAddressPool();
 
         USBTRACE("BM Init\r\n");
@@ -405,6 +407,38 @@ uint8_t HIDBoot<BOOT_PROTOCOL>::Init(uint8_t parent, uint8_t port, bool lowspeed
                                 pUsb->getConfDescr(bAddress, 0, i, &confDescrParserA);
                                 if(bNumEP == (uint8_t)(totalEndpoints(BOOT_PROTOCOL)))
                                         break;
+
+                                // https://github.com/tmk/tmk_keyboard/issues/697   vid:3233 pid:6301
+                                // HID / not boot / keyboard
+                                ConfigDescParser<
+                                        USB_CLASS_HID,
+                                        HID_BOOT_INTF_SUBCLASS,
+                                        HID_PROTOCOL_KEYBOARD,
+                                        CP_MASK_COMPARE_CLASS | CP_MASK_COMPARE_PROTOCOL> confDescrParser2(this);
+
+                                pUsb->getConfDescr(bAddress, 0, i, &confDescrParser2);
+                                if(bNumEP >= (uint8_t)(totalEndpoints(BOOT_PROTOCOL))) {
+                                        boot_interface = false;
+                                        break;
+                                }
+
+                                // https://github.com/tmk/tmk_keyboard/issues/778
+                                if (((USB_DEVICE_DESCRIPTOR*)buf)->idVendor == 0xc45 && ((USB_DEVICE_DESCRIPTOR*)buf)->idProduct == 0xfefe) {
+                                    // HID / not boot / not keyboard
+                                    ConfigDescParser<
+                                            USB_CLASS_HID,
+                                            HID_BOOT_INTF_SUBCLASS,
+                                            HID_PROTOCOL_KEYBOARD,
+                                            CP_MASK_COMPARE_CLASS> confDescrParser3(this);
+
+                                    pUsb->getConfDescr(bAddress, 0, i, &confDescrParser3);
+                                    if(bNumEP >= (uint8_t)(totalEndpoints(BOOT_PROTOCOL))) {
+                                            // assume first endpoint is boot keyboard compatible
+                                            bNumEP = totalEndpoints(BOOT_PROTOCOL);
+                                            boot_interface = true;
+                                            break;
+                                    }
+                                }
                         }
                 }
 
@@ -453,9 +487,16 @@ uint8_t HIDBoot<BOOT_PROTOCOL>::Init(uint8_t parent, uint8_t port, bool lowspeed
         // Yes, mouse wants SetProtocol and SetIdle too!
         for(uint8_t i = 0; i < epMUL(BOOT_PROTOCOL); i++) {
                 USBTRACE2("\r\nInterface:", i);
+
+                if (!boot_interface) {
+                        USBTRACE("skip SET_PROTOCOL\n");
+                        goto SKIP_SET_PROTOCOL;
+                }
                 rcode = SetProtocol(i, HID_BOOT_PROTOCOL);
                 if(rcode) goto FailSetProtocol;
                 USBTRACE2("PROTOCOL SET HID_BOOT rcode:", rcode);
+SKIP_SET_PROTOCOL:
+
                 rcode = SetIdle(i, 0, 0);
                 USBTRACE2("SET_IDLE rcode:", rcode);
                 // if(rcode) goto FailSetIdle; This can fail.
